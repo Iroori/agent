@@ -1,0 +1,13 @@
+{
+  "uuid": "sample-assistant",
+  "name": "Sample Assistant",
+  "model": "gpt-4o",
+  "system_prompt": "You are a helpful assistant. Be concise and accurate in your responses.",
+  "tools": [],
+  "temperature": 0.7,
+  "max_tokens": 4096,
+  "metadata": {
+    "author": "system",
+    "version": "1.0.0"
+  }
+}

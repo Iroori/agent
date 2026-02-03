@@ -1,0 +1,31 @@
+# High-Performance Multi-Agent System
+# Python 3.14 Free-threaded Compatible
+
+# LangChain ecosystem (pinned for compatibility)
+langchain>=0.3.0,<0.4.0
+langchain-core>=0.3.0,<0.4.0
+langchain-openai>=0.2.0,<0.3.0
+
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# Settings & Environment
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+python-dotenv>=1.0.0
+
+# WebSocket support
+websockets>=13.0
+
+# Logging
+loguru>=0.7.0
+
+# Async utilities
+aiofiles>=24.1.0
+
+# YAML support for agent configs
+pyyaml>=6.0.0
+
+# File watching (optional)
+watchfiles>=0.24.0
