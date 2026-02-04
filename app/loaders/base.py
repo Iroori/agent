@@ -1,7 +1,7 @@
 """Abstract base class for agent loaders."""
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -14,11 +14,29 @@ class ToolConfig(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class BindToolConfig(BaseModel):
+    """Tool binding configuration with type specification."""
+
+    name: str = Field(description="Tool name")
+    type: Literal["registry", "mcp"] = Field(
+        default="registry",
+        description="Tool source type: registry (local) or mcp (from MCP server)",
+    )
+    enabled: bool = Field(default=True)
+
+
 class MCPServerConfig(BaseModel):
     """MCP server configuration."""
 
-    url: str = Field(description="MCP server URL")
-    tools: list[str] = Field(default_factory=list, description="Tool names to import")
+    url: str = Field(description="MCP server URL or command for stdio")
+    transport: Literal["sse", "http", "streamable_http", "stdio"] = Field(
+        default="sse",
+        description="Transport type for MCP connection",
+    )
+    tools: list[str] = Field(
+        default_factory=list,
+        description="Tool names to import (empty = all)",
+    )
     auth_token: str | None = Field(default=None, description="Authentication token")
 
 
@@ -35,11 +53,19 @@ class AgentInfo(BaseModel):
     tools: list[str] = Field(
         default_factory=list, description="Tool names to bind to this agent"
     )
+    bind_tools: list[BindToolConfig] = Field(
+        default_factory=list,
+        description="Detailed tool bindings with type specification",
+    )
     tool_configs: list[ToolConfig] = Field(
         default_factory=list, description="Detailed tool configurations"
     )
     mcp_servers: list[MCPServerConfig] = Field(
         default_factory=list, description="MCP servers to connect"
+    )
+    sub_agent_ids: list[str] = Field(
+        default_factory=list,
+        description="Sub-agent UUIDs to bind as tools",
     )
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4096, ge=1)

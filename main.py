@@ -13,7 +13,23 @@ from app.agents.pool import get_agent_pool
 from app.api.rest import router as rest_router
 from app.api.websocket import router as ws_router
 from app.core.settings import settings
+from app.loaders.base import BaseAgentLoader
 from app.loaders.file_loader import FileAgentLoader
+from app.loaders.api_loader import SeedAIAPILoader
+
+
+def create_agent_loader() -> BaseAgentLoader:
+    """Create agent loader based on configuration.
+
+    Returns:
+        BaseAgentLoader instance based on AGENT_CONFIG_LOAD_TYPE setting
+    """
+    if settings.agent_config_load_type == "seedai-api":
+        logger.debug("Using SeedAI API loader")
+        return SeedAIAPILoader()
+    else:
+        logger.debug(f"Using file loader from {settings.agents_config_dir}")
+        return FileAgentLoader()
 
 
 @asynccontextmanager
@@ -23,35 +39,38 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Handles startup and shutdown events.
     """
     # Startup
-    logger.info("Starting High-Performance Multi-Agent System...")
-    logger.info(f"Debug mode: {settings.debug}")
-    logger.info(f"Agent config directory: {settings.agents_config_dir}")
+    logger.debug("Starting High-Performance Multi-Agent System...")
+    logger.debug(f"Debug mode: {settings.debug}")
+    logger.debug(f"Config load type: {settings.agent_config_load_type}")
 
-    # Initialize agent loader
-    loader = FileAgentLoader()
+    # Initialize agent loader based on config type
+    loader = create_agent_loader()
 
-    # Start file watching (optional)
-    await loader.watch_changes()
+    # Start file watching if using file loader
+    if isinstance(loader, FileAgentLoader):
+        logger.debug(f"Agent config directory: {settings.agents_config_dir}")
+        await loader.watch_changes()
 
     # Initialize agent pool
     pool = get_agent_pool()
     pool.set_loader(loader)
     await pool.start()
 
-    logger.info("System startup complete")
+    logger.debug("System startup complete")
 
     yield
 
     # Shutdown
-    logger.info("Shutting down...")
+    logger.debug("Shutting down...")
 
-    # Stop file watching
-    await loader.stop_watching()
+    # Stop file watching if applicable
+    if isinstance(loader, FileAgentLoader):
+        await loader.stop_watching()
 
     # Shutdown agent pool (gracefully stops all agents)
     await pool.shutdown()
 
-    logger.info("Shutdown complete")
+    logger.debug("Shutdown complete")
 
 
 def create_app() -> FastAPI:
