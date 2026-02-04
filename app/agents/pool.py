@@ -55,7 +55,7 @@ class AgentPool:
             self._running = False
 
             self._initialized = True
-            logger.info(
+            logger.debug(
                 f"AgentPool initialized: max_size={self._max_size}, "
                 f"idle_timeout={self._idle_timeout}"
             )
@@ -67,7 +67,7 @@ class AgentPool:
             loader: BaseAgentLoader implementation
         """
         self._loader = loader
-        logger.info(f"Agent loader set: {type(loader).__name__}")
+        logger.debug(f"Agent loader set: {type(loader).__name__}")
 
     @property
     def size(self) -> int:
@@ -135,9 +135,9 @@ class AgentPool:
             if not agent_info:
                 raise ValueError(f"Agent configuration not found: {uuid}")
 
-            agent = await self._builder.build(agent_info)
+            agent = await self._builder.build(agent_info, agent_loader=self._loader)
             self._agents[uuid] = agent
-            logger.info(f"Agent added to pool: {uuid} (pool size: {len(self._agents)})")
+            logger.debug(f"Agent added to pool: {uuid} (pool size: {len(self._agents)})")
 
             return agent
 
@@ -161,9 +161,9 @@ class AgentPool:
                 if len(self._agents) >= self._max_size:
                     raise RuntimeError("Agent pool full")
 
-            agent = await self._builder.build(agent_info)
+            agent = await self._builder.build(agent_info, agent_loader=self._loader)
             self._agents[agent_info.uuid] = agent
-            logger.info(
+            logger.debug(
                 f"Agent created from info: {agent_info.uuid} "
                 f"(pool size: {len(self._agents)})"
             )
@@ -184,7 +184,7 @@ class AgentPool:
 
         if agent:
             await agent.shutdown()
-            logger.info(f"Agent removed from pool: {uuid}")
+            logger.debug(f"Agent removed from pool: {uuid}")
             return True
         return False
 
@@ -210,9 +210,9 @@ class AgentPool:
             if old_agent:
                 await old_agent.shutdown()
 
-            new_agent = await self._builder.build(agent_info)
+            new_agent = await self._builder.build(agent_info, agent_loader=self._loader)
             self._agents[uuid] = new_agent
-            logger.info(f"Agent reloaded: {uuid}")
+            logger.debug(f"Agent reloaded: {uuid}")
 
             return new_agent
 

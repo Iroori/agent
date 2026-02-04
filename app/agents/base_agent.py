@@ -1,4 +1,4 @@
-"""Base agent entity wrapping LangChain agent."""
+"""Base agent entity wrapping LangGraph ReAct agent."""
 
 import asyncio
 import threading
@@ -7,8 +7,15 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, AsyncIterator
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_core.tools import BaseTool
+from langgraph.prebuilt import create_react_agent
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -45,14 +52,22 @@ class AgentResponse(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class AgentType(str, Enum):
+    """Agent type classification."""
+
+    MAIN = "main"
+    SUB = "sub"
+
+
 class BaseAgent:
-    """LangChain agent wrapper with observability and thread-safety.
+    """LangGraph ReAct agent wrapper with observability and thread-safety.
 
     Provides:
-    - Async invocation with streaming support
+    - Async invocation with streaming support via LangGraph
     - Token usage tracking
     - Session-based conversation memory
     - Structured logging
+    - ReAct pattern for tool usage
     """
 
     def __init__(
@@ -60,6 +75,7 @@ class BaseAgent:
         agent_info: AgentInfo,
         llm: Any,
         tools: list[BaseTool] | None = None,
+        agent_type: AgentType = AgentType.MAIN,
     ) -> None:
         """Initialize base agent.
 
@@ -67,10 +83,12 @@ class BaseAgent:
             agent_info: Agent configuration
             llm: LangChain LLM instance
             tools: List of bound tools
+            agent_type: Agent type (main or sub)
         """
         self._info = agent_info
         self._llm = llm
         self._tools = tools or []
+        self._agent_type = agent_type
         self._status = AgentStatus.INITIALIZING
         self._lock = threading.Lock()
         self._active_sessions: set[str] = set()
@@ -79,39 +97,33 @@ class BaseAgent:
         self._invocation_count = 0
         self._total_tokens = TokenUsage()
 
-        # Create agent executor
-        self._executor = self._create_executor()
+        # Create LangGraph ReAct agent
+        self._graph = self._create_react_graph()
 
         self._status = AgentStatus.READY
         self._logger = get_agent_logger(self.uuid)
-        self._logger.info(f"Agent initialized: {self._info.name}")
+        self._logger.info(f"Agent initialized: {self._info.name} (type={agent_type.value})")
 
-    def _create_executor(self) -> Any:
-        """Create LangChain agent executor."""
-        from langchain.agents import AgentExecutor, create_openai_tools_agent
-        from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+    def _create_react_graph(self) -> Any:
+        """Create LangGraph ReAct agent.
 
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", self._info.system_prompt),
-                MessagesPlaceholder(variable_name="chat_history"),
-                ("human", "{input}"),
-                MessagesPlaceholder(variable_name="agent_scratchpad"),
-            ]
-        )
-
+        Returns:
+            Compiled LangGraph graph
+        """
         if self._tools:
-            agent = create_openai_tools_agent(self._llm, self._tools, prompt)
-            return AgentExecutor(
-                agent=agent,
+            # Create ReAct agent with tools using LangGraph
+            return create_react_agent(
+                model=self._llm,
                 tools=self._tools,
-                verbose=False,
-                handle_parsing_errors=True,
-                max_iterations=10,
+                prompt=self._info.system_prompt,
             )
         else:
-            # No tools - use simple chain
-            return prompt | self._llm
+            # No tools - create simple ReAct agent without tools
+            return create_react_agent(
+                model=self._llm,
+                tools=[],
+                prompt=self._info.system_prompt,
+            )
 
     @property
     def uuid(self) -> str:
@@ -129,6 +141,11 @@ class BaseAgent:
         return self._info
 
     @property
+    def agent_type(self) -> AgentType:
+        """Get agent type."""
+        return self._agent_type
+
+    @property
     def status(self) -> AgentStatus:
         """Get current status."""
         with self._lock:
@@ -140,6 +157,11 @@ class BaseAgent:
         return self.status == AgentStatus.READY
 
     @property
+    def tools(self) -> list[BaseTool]:
+        """Get agent tools."""
+        return self._tools
+
+    @property
     def stats(self) -> dict[str, Any]:
         """Get agent statistics."""
         with self._lock:
@@ -147,6 +169,7 @@ class BaseAgent:
                 "uuid": self.uuid,
                 "name": self.name,
                 "status": self._status.value,
+                "agent_type": self._agent_type.value,
                 "created_at": self._created_at.isoformat(),
                 "last_used_at": (
                     self._last_used_at.isoformat() if self._last_used_at else None
@@ -154,6 +177,7 @@ class BaseAgent:
                 "invocation_count": self._invocation_count,
                 "active_sessions": len(self._active_sessions),
                 "total_tokens": self._total_tokens.model_dump(),
+                "tools_count": len(self._tools),
             }
 
     def _convert_to_langchain_messages(
@@ -175,7 +199,7 @@ class BaseAgent:
         input_text: str,
         session_id: str | None = None,
     ) -> AgentResponse:
-        """Invoke agent with input text.
+        """Invoke agent with input text using LangGraph ReAct pattern.
 
         Args:
             input_text: User input
@@ -194,7 +218,7 @@ class BaseAgent:
             self._active_sessions.add(session_id)
 
         try:
-            agent_logger.info(f"Invoking with input: {input_text[:100]}...")
+            agent_logger.debug(f"Invoking with input: {input_text[:100]}...")
 
             # Load conversation history
             memory = get_memory_storage()
@@ -203,28 +227,30 @@ class BaseAgent:
                 self._convert_to_langchain_messages(history.messages) if history else []
             )
 
-            # Invoke agent
-            if self._tools:
-                result = await self._executor.ainvoke(
-                    {"input": input_text, "chat_history": chat_history}
-                )
-                output = result.get("output", "")
-            else:
-                # Simple chain without tools
-                result = await self._executor.ainvoke(
-                    {"input": input_text, "chat_history": chat_history}
-                )
-                output = result.content if hasattr(result, "content") else str(result)
+            # Build messages for LangGraph
+            messages = chat_history + [HumanMessage(content=input_text)]
 
-            # Extract token usage if available
+            # Invoke LangGraph ReAct agent
+            result = await self._graph.ainvoke({"messages": messages})
+
+            # Extract output from result
+            output = ""
             token_usage = TokenUsage()
-            if hasattr(result, "response_metadata"):
-                usage = result.response_metadata.get("token_usage", {})
-                token_usage = TokenUsage(
-                    prompt_tokens=usage.get("prompt_tokens", 0),
-                    completion_tokens=usage.get("completion_tokens", 0),
-                    total_tokens=usage.get("total_tokens", 0),
-                )
+
+            if "messages" in result:
+                # Get the last AI message
+                for msg in reversed(result["messages"]):
+                    if isinstance(msg, AIMessage):
+                        output = msg.content
+                        # Extract token usage from response metadata
+                        if hasattr(msg, "response_metadata") and msg.response_metadata:
+                            usage = msg.response_metadata.get("token_usage", {})
+                            token_usage = TokenUsage(
+                                prompt_tokens=usage.get("prompt_tokens", 0),
+                                completion_tokens=usage.get("completion_tokens", 0),
+                                total_tokens=usage.get("total_tokens", 0),
+                            )
+                        break
 
             # Track tokens
             if token_usage.total_tokens > 0:
@@ -250,7 +276,7 @@ class BaseAgent:
                 self._total_tokens.completion_tokens += token_usage.completion_tokens
                 self._total_tokens.total_tokens += token_usage.total_tokens
 
-            agent_logger.info(f"Invocation complete, tokens: {token_usage.total_tokens}")
+            agent_logger.debug(f"Invocation complete, tokens: {token_usage.total_tokens}")
 
             return AgentResponse(
                 content=output,
@@ -273,7 +299,7 @@ class BaseAgent:
         input_text: str,
         session_id: str | None = None,
     ) -> AsyncIterator[str]:
-        """Stream agent response.
+        """Stream agent response using LangGraph ReAct pattern.
 
         Args:
             input_text: User input
@@ -294,7 +320,7 @@ class BaseAgent:
         full_response = ""
 
         try:
-            agent_logger.info(f"Streaming with input: {input_text[:100]}...")
+            agent_logger.debug(f"Streaming with input: {input_text[:100]}...")
 
             # Load conversation history
             memory = get_memory_storage()
@@ -303,21 +329,24 @@ class BaseAgent:
                 self._convert_to_langchain_messages(history.messages) if history else []
             )
 
-            # Stream response
-            if self._tools:
-                async for chunk in self._executor.astream(
-                    {"input": input_text, "chat_history": chat_history}
-                ):
-                    if "output" in chunk:
-                        yield chunk["output"]
-                        full_response += chunk["output"]
-            else:
-                async for chunk in self._executor.astream(
-                    {"input": input_text, "chat_history": chat_history}
-                ):
-                    content = chunk.content if hasattr(chunk, "content") else str(chunk)
-                    yield content
-                    full_response += content
+            # Build messages for LangGraph
+            messages = chat_history + [HumanMessage(content=input_text)]
+
+            # Stream response from LangGraph ReAct agent
+            async for event in self._graph.astream_events(
+                {"messages": messages},
+                version="v2",
+            ):
+                kind = event.get("event", "")
+
+                # Stream AI message chunks
+                if kind == "on_chat_model_stream":
+                    chunk = event.get("data", {}).get("chunk")
+                    if chunk and isinstance(chunk, AIMessageChunk):
+                        content = chunk.content
+                        if content:
+                            yield content
+                            full_response += content
 
             # Save to memory
             await memory.append(
@@ -331,7 +360,7 @@ class BaseAgent:
                 self._invocation_count += 1
                 self._last_used_at = datetime.utcnow()
 
-            agent_logger.info("Streaming complete")
+            agent_logger.debug("Streaming complete")
 
         except Exception as e:
             agent_logger.error(f"Streaming failed: {e}")

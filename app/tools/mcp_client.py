@@ -1,10 +1,10 @@
-"""MCP (Model Context Protocol) client for external tool integration."""
+"""MCP (Model Context Protocol) client using langchain-mcp-adapters."""
 
 import asyncio
 import threading
-from typing import Any
+from typing import Any, Literal
 
-from langchain_core.tools import BaseTool, StructuredTool
+from langchain_core.tools import BaseTool
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -17,15 +17,13 @@ class MCPToolSpec(BaseModel):
     input_schema: dict[str, Any] = Field(
         default_factory=dict, description="JSON Schema for tool inputs"
     )
-    output_schema: dict[str, Any] = Field(
-        default_factory=dict, description="JSON Schema for tool outputs"
-    )
 
 
 class MCPServerInfo(BaseModel):
     """Information about an MCP server."""
 
     url: str
+    transport: Literal["sse", "http", "streamable_http", "stdio"] = "sse"
     name: str = ""
     version: str = ""
     tools: list[MCPToolSpec] = Field(default_factory=list)
@@ -33,41 +31,50 @@ class MCPServerInfo(BaseModel):
 
 
 class MCPClient:
-    """Client for connecting to MCP (Model Context Protocol) servers.
+    """Client for connecting to MCP servers using langchain-mcp-adapters.
 
-    MCP provides a standardized way for LLMs to interact with external tools.
-    This client handles:
-    - Server discovery and connection
-    - Tool listing and execution
-    - Authentication
-    - Retry logic
+    Supports multiple transport types:
+    - sse: Server-Sent Events
+    - http: HTTP transport
+    - streamable_http: Streamable HTTP transport
+    - stdio: Standard I/O (for local processes)
     """
 
     def __init__(
         self,
         server_url: str,
         auth_token: str | None = None,
+        transport: Literal["sse", "http", "streamable_http", "stdio"] = "sse",
         timeout: float = 30.0,
     ) -> None:
         """Initialize MCP client.
 
         Args:
-            server_url: MCP server URL
+            server_url: MCP server URL or command for stdio
             auth_token: Optional authentication token
+            transport: Transport type (sse, http, streamable_http, stdio)
             timeout: Request timeout in seconds
         """
         self._server_url = server_url
         self._auth_token = auth_token
+        self._transport = transport
         self._timeout = timeout
         self._server_info: MCPServerInfo | None = None
         self._tools: dict[str, BaseTool] = {}
         self._lock = threading.Lock()
         self._connected = False
+        self._mcp_client: Any = None
+        self._session: Any = None
 
     @property
     def server_url(self) -> str:
         """Get server URL."""
         return self._server_url
+
+    @property
+    def transport(self) -> str:
+        """Get transport type."""
+        return self._transport
 
     @property
     def is_connected(self) -> bool:
@@ -81,41 +88,125 @@ class MCPClient:
             True if connection successful
         """
         try:
-            # In a real implementation, this would make HTTP/WebSocket requests
-            # to the MCP server to discover available tools
-            logger.info(f"Connecting to MCP server: {self._server_url}")
+            logger.debug(f"Connecting to MCP server: {self._server_url} via {self._transport}")
 
-            # Simulate server info retrieval
-            self._server_info = MCPServerInfo(
-                url=self._server_url,
-                name="MCP Server",
-                version="1.0.0",
-                tools=[],
-                connected=True,
-            )
-
-            # TODO: Implement actual MCP protocol
-            # This would involve:
-            # 1. HTTP GET to server_url/tools to list available tools
-            # 2. Parse tool specifications
-            # 3. Create LangChain tool wrappers
+            if self._transport == "sse":
+                await self._connect_sse()
+            elif self._transport in ("http", "streamable_http"):
+                await self._connect_http()
+            elif self._transport == "stdio":
+                await self._connect_stdio()
+            else:
+                raise ValueError(f"Unknown transport: {self._transport}")
 
             self._connected = True
-            logger.info(f"Connected to MCP server: {self._server_url}")
+            logger.debug(f"Connected to MCP server: {self._server_url}")
             return True
 
+        except ImportError as e:
+            logger.error(f"MCP adapter not available: {e}")
+            return False
         except Exception as e:
             logger.error(f"Failed to connect to MCP server: {e}")
             self._connected = False
             return False
 
+    async def _connect_sse(self) -> None:
+        """Connect using SSE transport."""
+        try:
+            from langchain_mcp_adapters.client import MultiServerMCPClient
+
+            headers = {}
+            if self._auth_token:
+                headers["Authorization"] = f"Bearer {self._auth_token}"
+
+            self._mcp_client = MultiServerMCPClient(
+                {
+                    "mcp_server": {
+                        "url": self._server_url,
+                        "transport": "sse",
+                        "headers": headers if headers else None,
+                    }
+                }
+            )
+            await self._mcp_client.__aenter__()
+            self._tools = {tool.name: tool for tool in self._mcp_client.get_tools()}
+
+        except ImportError:
+            # Fallback to basic SSE client
+            from langchain_mcp_adapters.tools import load_mcp_tools
+            from mcp import ClientSession
+            from mcp.client.sse import sse_client
+
+            headers = {}
+            if self._auth_token:
+                headers["Authorization"] = f"Bearer {self._auth_token}"
+
+            async with sse_client(self._server_url, headers=headers) as (read, write):
+                async with ClientSession(read, write) as session:
+                    self._session = session
+                    await session.initialize()
+
+                    tools = await load_mcp_tools(session)
+                    self._tools = {tool.name: tool for tool in tools}
+
+    async def _connect_http(self) -> None:
+        """Connect using HTTP transport."""
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+
+        transport_type = "streamable_http" if self._transport == "streamable_http" else "http"
+
+        headers = {}
+        if self._auth_token:
+            headers["Authorization"] = f"Bearer {self._auth_token}"
+
+        self._mcp_client = MultiServerMCPClient(
+            {
+                "mcp_server": {
+                    "url": self._server_url,
+                    "transport": transport_type,
+                    "headers": headers if headers else None,
+                }
+            }
+        )
+        await self._mcp_client.__aenter__()
+        self._tools = {tool.name: tool for tool in self._mcp_client.get_tools()}
+
+    async def _connect_stdio(self) -> None:
+        """Connect using stdio transport."""
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+
+        # For stdio, server_url should be the command to run
+        command_parts = self._server_url.split()
+        command = command_parts[0]
+        args = command_parts[1:] if len(command_parts) > 1 else []
+
+        self._mcp_client = MultiServerMCPClient(
+            {
+                "mcp_server": {
+                    "command": command,
+                    "args": args,
+                    "transport": "stdio",
+                }
+            }
+        )
+        await self._mcp_client.__aenter__()
+        self._tools = {tool.name: tool for tool in self._mcp_client.get_tools()}
+
     async def disconnect(self) -> None:
         """Disconnect from MCP server."""
+        if self._mcp_client:
+            try:
+                await self._mcp_client.__aexit__(None, None, None)
+            except Exception as e:
+                logger.debug(f"Error during MCP client cleanup: {e}")
+
         self._connected = False
-        self._server_info = None
+        self._mcp_client = None
+        self._session = None
         with self._lock:
             self._tools.clear()
-        logger.info(f"Disconnected from MCP server: {self._server_url}")
+        logger.debug(f"Disconnected from MCP server: {self._server_url}")
 
     async def list_tools(self) -> list[MCPToolSpec]:
         """List available tools from server.
@@ -123,9 +214,20 @@ class MCPClient:
         Returns:
             List of tool specifications
         """
-        if not self._connected or not self._server_info:
+        if not self._connected:
             return []
-        return self._server_info.tools
+
+        specs = []
+        with self._lock:
+            for name, tool in self._tools.items():
+                specs.append(
+                    MCPToolSpec(
+                        name=tool.name,
+                        description=tool.description or "",
+                        input_schema=tool.args_schema.model_json_schema() if tool.args_schema else {},
+                    )
+                )
+        return specs
 
     async def get_tool(self, name: str) -> BaseTool | None:
         """Get a tool by name.
@@ -134,25 +236,10 @@ class MCPClient:
             name: Tool name
 
         Returns:
-            LangChain tool wrapper if found
+            LangChain tool if found
         """
         with self._lock:
-            if name in self._tools:
-                return self._tools[name]
-
-        # Check if tool exists on server
-        tools = await self.list_tools()
-        tool_spec = next((t for t in tools if t.name == name), None)
-
-        if not tool_spec:
-            return None
-
-        # Create LangChain tool wrapper
-        lc_tool = self._create_tool_wrapper(tool_spec)
-        with self._lock:
-            self._tools[name] = lc_tool
-
-        return lc_tool
+            return self._tools.get(name)
 
     async def get_tools(self, names: list[str] | None = None) -> list[BaseTool]:
         """Get multiple tools.
@@ -161,77 +248,30 @@ class MCPClient:
             names: Tool names to get, or None for all
 
         Returns:
-            List of LangChain tool wrappers
+            List of LangChain tools
         """
         if not self._connected:
             return []
 
-        all_specs = await self.list_tools()
+        with self._lock:
+            if names:
+                return [self._tools[name] for name in names if name in self._tools]
+            return list(self._tools.values())
 
-        if names:
-            specs = [s for s in all_specs if s.name in names]
-        else:
-            specs = all_specs
-
-        tools = []
-        for spec in specs:
-            tool = await self.get_tool(spec.name)
-            if tool:
-                tools.append(tool)
-
-        return tools
-
-    def _create_tool_wrapper(self, spec: MCPToolSpec) -> BaseTool:
-        """Create a LangChain tool wrapper for an MCP tool.
+    def get_filtered_tools(self, tool_names: list[str]) -> list[BaseTool]:
+        """Get tools filtered by name list.
 
         Args:
-            spec: MCP tool specification
+            tool_names: List of tool names to include
 
         Returns:
-            LangChain tool wrapper
+            Filtered list of tools
         """
-
-        async def call_mcp_tool(**kwargs: Any) -> str:
-            """Execute MCP tool call."""
-            return await self._execute_tool(spec.name, kwargs)
-
-        return StructuredTool.from_function(
-            func=call_mcp_tool,
-            name=spec.name,
-            description=spec.description,
-            coroutine=call_mcp_tool,
-        )
-
-    async def _execute_tool(
-        self, tool_name: str, arguments: dict[str, Any]
-    ) -> str:
-        """Execute a tool on the MCP server.
-
-        Args:
-            tool_name: Tool to execute
-            arguments: Tool arguments
-
-        Returns:
-            Tool execution result
-        """
-        if not self._connected:
-            raise RuntimeError("Not connected to MCP server")
-
-        try:
-            # TODO: Implement actual MCP tool execution
-            # This would involve:
-            # 1. HTTP POST to server_url/tools/{tool_name}/execute
-            # 2. Send arguments as JSON body
-            # 3. Parse and return result
-
-            logger.debug(f"Executing MCP tool: {tool_name} with args: {arguments}")
-
-            # Placeholder response
-            return f"MCP tool '{tool_name}' executed successfully"
-
-        except Exception as e:
-            logger.error(f"MCP tool execution failed: {e}")
-            raise
+        with self._lock:
+            return [
+                tool for name, tool in self._tools.items()
+                if name in tool_names
+            ]
 
 
 class MCPManager:
@@ -245,19 +285,21 @@ class MCPManager:
         self,
         server_url: str,
         auth_token: str | None = None,
+        transport: Literal["sse", "http", "streamable_http", "stdio"] = "sse",
         auto_connect: bool = True,
     ) -> MCPClient:
         """Add and optionally connect to an MCP server.
 
         Args:
-            server_url: Server URL
+            server_url: Server URL or command
             auth_token: Authentication token
+            transport: Transport type
             auto_connect: Whether to connect immediately
 
         Returns:
             MCPClient instance
         """
-        client = MCPClient(server_url, auth_token)
+        client = MCPClient(server_url, auth_token, transport)
 
         with self._lock:
             self._clients[server_url] = client
@@ -310,3 +352,17 @@ class MCPManager:
 
         for client in clients:
             await client.disconnect()
+
+
+# Global MCP manager instance
+_mcp_manager: MCPManager | None = None
+_manager_lock = threading.Lock()
+
+
+def get_mcp_manager() -> MCPManager:
+    """Get global MCP manager instance."""
+    global _mcp_manager
+    with _manager_lock:
+        if _mcp_manager is None:
+            _mcp_manager = MCPManager()
+        return _mcp_manager
