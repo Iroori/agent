@@ -1,31 +1,37 @@
-# High-Performance Multi-Agent System
-# Python 3.14 Free-threaded Compatible
+# langchain
+langchain==1.2.2
+langchain-core==1.2.6
+langchain-community==0.4.1
+langchain-openai==1.1.7
+langchain-ollama==1.0.1
+langchain-anthropic==1.3.1
+langchain-tools==0.1.34
+langchain-mcp-adapters==0.2.1
+langchain-google-genai==4.1.3
+langchain_xai==1.2.1
+# langgraph
+langgraph>=1.0.5
+langgraph.prebuilt==1.0.5
 
-# LangChain ecosystem (pinned for compatibility)
-langchain>=0.3.0,<0.4.0
-langchain-core>=0.3.0,<0.4.0
-langchain-openai>=0.2.0,<0.3.0
+# mcp
+mcp==1.25.0
 
-# Web framework
+# friendli
+
 fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
+uvicorn>=0.34.0
+python-dotenv>=1.1.0
+websockets>=15.0.1
+sse-starlette>=2.2.1
+pydantic>=2.11.0
 
-# Settings & Environment
-pydantic>=2.9.0
-pydantic-settings>=2.6.0
-python-dotenv>=1.0.0
+# 메시지 요약 스토어 관련 라이브러리
+numpy>=1.24.0
+scikit-learn>=1.3.0
 
-# WebSocket support
-websockets>=13.0
+faiss-cpu==1.10.0
+pandas==2.2.3
 
-# Logging
-loguru>=0.7.0
-
-# Async utilities
-aiofiles>=24.1.0
-
-# YAML support for agent configs
-pyyaml>=6.0.0
-
-# File watching (optional)
-watchfiles>=0.24.0
+# AWS S3 관련 라이브러리
+boto3>=1.34.0
+botocore>=1.34.0
