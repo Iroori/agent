@@ -129,6 +129,12 @@ class AgentBuilder:
         tools = []
         registry = get_tool_registry()
 
+        # Always bind mandatory tools (math tool for accurate calculations)
+        math_tool = registry.get("math")
+        if math_tool:
+            tools.append(math_tool)
+            logger.debug("Bound mandatory tool: math")
+
         # Bind tools from simple tools list
         for tool_name in agent_info.tools:
             tool = registry.get(tool_name)

@@ -2,5 +2,14 @@
 
 from app.tools.registry import ToolRegistry, tool, get_tool_registry
 from app.tools.mcp_client import MCPClient, MCPToolSpec
+from app.tools.math_tool import register_math_tool, evaluate_expression
 
-__all__ = ["ToolRegistry", "tool", "get_tool_registry", "MCPClient", "MCPToolSpec"]
+__all__ = [
+    "ToolRegistry",
+    "tool",
+    "get_tool_registry",
+    "MCPClient",
+    "MCPToolSpec",
+    "register_math_tool",
+    "evaluate_expression",
+]
