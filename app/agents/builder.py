@@ -129,6 +129,13 @@ class AgentBuilder:
         tools = []
         registry = get_tool_registry()
 
+        # Always bind mandatory tools
+        for mandatory_tool_name in ["math", "datetime"]:
+            mandatory_tool = registry.get(mandatory_tool_name)
+            if mandatory_tool:
+                tools.append(mandatory_tool)
+                logger.debug(f"Bound mandatory tool: {mandatory_tool_name}")
+
         # Bind tools from simple tools list
         for tool_name in agent_info.tools:
             tool = registry.get(tool_name)

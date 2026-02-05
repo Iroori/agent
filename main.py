@@ -16,6 +16,7 @@ from app.core.settings import settings
 from app.loaders.base import BaseAgentLoader
 from app.loaders.file_loader import FileAgentLoader
 from app.loaders.api_loader import SeedAIAPILoader
+import app.tools  # noqa: F401 - Import to register mandatory tools (math)
 
 
 def create_agent_loader() -> BaseAgentLoader:
