@@ -77,6 +77,24 @@ class Settings(BaseSettings):
         default="INFO"
     )
     log_format: Literal["json", "text"] = Field(default="json")
+    log_file_path: str = Field(
+        default="./logs/antigravity.log",
+        description="Path for the rotating log file",
+    )
+    log_rotation_backup_count: int = Field(
+        default=30,
+        ge=1,
+        description="Number of days to retain rotated log files",
+    )
+    tool_latency_warning_threshold_secs: float = Field(
+        default=5.0,
+        ge=0.1,
+        description="Latency threshold in seconds above which a SLOW_TOOL warning is emitted",
+    )
+    log_sensitive_masking: bool = Field(
+        default=True,
+        description="Mask sensitive values (API keys, tokens) in log output",
+    )
 
     # Agent Configuration Directory
     agents_config_dir: str = Field(default="./agents_config")

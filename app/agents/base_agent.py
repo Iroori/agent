@@ -19,6 +19,7 @@ from langgraph.prebuilt import create_react_agent
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from app.core.callback_handler import UniversalToolCallbackHandler
 from app.core.logger import get_agent_logger, token_tracker
 from app.loaders.base import AgentInfo
 from app.memory.base import Message, get_memory_storage
@@ -230,8 +231,20 @@ class BaseAgent:
             # Build messages for LangGraph
             messages = chat_history + [HumanMessage(content=input_text)]
 
-            # Invoke LangGraph ReAct agent
-            result = await self._graph.ainvoke({"messages": messages})
+            # Build callback handler bound to this session
+            from app.api.websocket import manager as ws_manager  # local import avoids circular dep
+
+            callback_handler = UniversalToolCallbackHandler(
+                agent_uuid=self.uuid,
+                session_id=session_id,
+                ws_manager=ws_manager,
+            )
+
+            # Invoke LangGraph ReAct agent with observability callbacks
+            result = await self._graph.ainvoke(
+                {"messages": messages},
+                config={"callbacks": [callback_handler]},
+            )
 
             # Extract output from result
             output = ""
@@ -332,9 +345,19 @@ class BaseAgent:
             # Build messages for LangGraph
             messages = chat_history + [HumanMessage(content=input_text)]
 
-            # Stream response from LangGraph ReAct agent
+            # Build callback handler bound to this session
+            from app.api.websocket import manager as ws_manager  # local import avoids circular dep
+
+            callback_handler = UniversalToolCallbackHandler(
+                agent_uuid=self.uuid,
+                session_id=session_id,
+                ws_manager=ws_manager,
+            )
+
+            # Stream response from LangGraph ReAct agent with observability callbacks
             async for event in self._graph.astream_events(
                 {"messages": messages},
+                config={"callbacks": [callback_handler]},
                 version="v2",
             ):
                 kind = event.get("event", "")

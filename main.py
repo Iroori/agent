@@ -12,6 +12,7 @@ from loguru import logger
 from app.agents.pool import get_agent_pool
 from app.api.rest import router as rest_router
 from app.api.websocket import router as ws_router
+from app.core.logger import configure_file_logger
 from app.core.settings import settings
 from app.loaders.base import BaseAgentLoader
 from app.loaders.file_loader import FileAgentLoader
@@ -40,6 +41,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Handles startup and shutdown events.
     """
     # Startup
+    # Initialise file logger first so all subsequent messages go to disk
+    configure_file_logger()
+
     logger.debug("Starting High-Performance Multi-Agent System...")
     logger.debug(f"Debug mode: {settings.debug}")
     logger.debug(f"Config load type: {settings.agent_config_load_type}")
